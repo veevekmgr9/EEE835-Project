@@ -1,4 +1,4 @@
-//Libraries
+// Libraries
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
@@ -6,41 +6,41 @@
 #include <WiFiNINA.h>
 #include <ArduinoMqttClient.h>
 
-//WiFi credentials
+// WiFi credentials
 char ssid[] = "s22plus";
-char pass[] = "test123!";   
+char pass[] = "test123!";
 
-//Wifi client for wifi connection
+// WiFi and MQTT clients
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
 
-//Broker
+// MQTT broker details
 const char broker[] = "broker.hivemq.com";
 int port = 1883;
 
-// MQTT topic from bed/desk board
-const char topicBedLight[] = "home/bedroom/light";
+// MQTT topics from Bed node
+const char topicBedLight[]  = "home/bedroom/light";
 const char topicBedMotion[] = "home/bedroom/motion";
 const char topicBedStatus[] = "home/bedroom/status";
 
-const char topicDeskLight[] = "desk/light";
+// MQTT topics from Desk node
+const char topicDeskLight[]    = "desk/light";
 const char topicDeskDistance[] = "desk/distance";
-const char topicDeskStatus[] = "desk/status";
+const char topicDeskStatus[]   = "desk/status";
 
-// stores last message from bed node
+// Stores last received MQTT message
 String bedMessage = "";
 bool bedMessageAvailable = false;
 
-//  Sensor and IO pin setup
+// Sensor pin definitions
+#define DHTPIN   3
+#define DHTTYPE  DHT11
 
-#define DHTPIN   3          // DHT signal pin
-#define DHTTYPE  DHT11      // using DHT11 sensor
+const int SOUND_PIN  = 2;
+const int BUZZER_PIN = 5;
+const int BUTTON_PIN = 6;
 
-const int SOUND_PIN  = 2;   // digital output from sound sensor
-const int BUZZER_PIN = 5;   // buzzer output
-const int BUTTON_PIN = 6;   // button to silence alarms
-
-// normal temp and humidity limits
+// Normal threshold values
 float NORMAL_TEMP = 25.0;
 float NORMAL_HUM  = 50.0;
 
@@ -48,280 +48,200 @@ float NORMAL_HUM  = 50.0;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 DHT dht(DHTPIN, DHTTYPE);
 
-// alarm state variables
-bool alarmActive = false;         // true while buzzer is sounding
-bool alarmSystemEnabled = true;   // false when user disables alarms
+// Alarm state flags
+bool alarmActive = false;
+bool alarmSystemEnabled = true;
 
-unsigned long alarmStartTime  = 0;  // when the alarm started
-unsigned long alarmResumeTime = 0;  // when alarms turn back on
+// Used to control alarm timing
+unsigned long alarmStartTime  = 0;
+unsigned long alarmResumeTime = 0;
 
-// scrolling text settings
+// Variables for scrolling text
 String alertMessage = "Alert! ";
 unsigned long lastScrollTime = 0;
 int scrollPosition = 0;
 
 int scrollIndexBed = 0;
 unsigned long lastScrollBed = 0;
-unsigned long scrollIntervalBed = 250;
 
-// DHT read timer
+// Timer to avoid reading DHT too often
 unsigned long lastDHTUpdate = 0;
 
-// -------------------- WiFi and MQTT helper functions --------------------
 
-// connect to WiFi network
+// Connect to WiFi network
 void connectWiFi() {
-  // if already connected do nothing
-  if (WiFi.status() == WL_CONNECTED) {
-    return;
-  }
 
+  // Do nothing if already connected
+  if (WiFi.status() == WL_CONNECTED) return;
+
+  // LCD Message
   lcd.setCursor(0, 0);
-  lcd.print("CONNECTING TO WIFI");
-  delay(400);
+  lcd.print("Connecting WiFi");
   Serial.println("Connecting to WiFi");
-//   WiFi.begin(ssid, pass);
 
-int status = WiFi.begin(ssid, pass);
-  while (status!= WL_CONNECTED) {
+  //Wifi begin
+  WiFi.begin(ssid, pass);
+
+  // Keep trying until connected
+  while (WiFi.status() != WL_CONNECTED) {
     delay(2000);
     Serial.print(".");
-    Serial.print(".");
-  delay(1000);
-
-  status = WiFi.status();
-
-  if (status == WL_CONNECT_FAILED) {
-    Serial.println("Wrong password!");
   }
 
-  if (status == WL_NO_SSID_AVAIL) {
-    Serial.println("SSID NOT FOUND!");
-  }
-  }
-
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("WIFI CONNECTED");
-    delay(400);
-    Serial.println();
-    Serial.println("WiFi connected");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
+  // LCD Clear and show Message
+  lcd.clear();
+  lcd.print("WiFi Connected");
+  delay(500);
 }
 
-// connect to MQTT broker and subscribe to topic
+
+// Connect to MQTT broker and subscribe to topics
 void connectMqtt() {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("CONNECTING TO MQTT BROKER");
-    delay(400);
-  Serial.print("Connecting to MQTT broker ");
 
+// LCD Clear and show Message
+  lcd.clear();
+  lcd.print("Connecting MQTT");
+  delay(400);
+
+  // Retry until MQTT connection is successful
   while (!mqttClient.connect(broker, port)) {
-    Serial.print(".");
-    Serial.print(" error = ");
-    Serial.println(mqttClient.connectError());
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("ERROR CONNECTING TO MQTT BROKER");
-    delay(400);
     delay(2000);
-
   }
 
-  Serial.println();
-  Serial.println("MQTT connected");
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("MQTT CONNECTED");
-    delay(400);
+  // LCD Clear and show Message
+  lcd.clear();
+  lcd.print("MQTT Connected");
+  delay(500);
 
-    //Subscribe to Bed Node
+  // Subscribe to Bed node topics
   mqttClient.subscribe(topicBedLight);
   mqttClient.subscribe(topicBedMotion);
   mqttClient.subscribe(topicBedStatus);
 
-//Subscribed to Desk Node
+  // Subscribe to Desk node topics
   mqttClient.subscribe(topicDeskLight);
   mqttClient.subscribe(topicDeskDistance);
   mqttClient.subscribe(topicDeskStatus);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(topicBedLight);
-  Serial.println(topicBedMotion);
-  Serial.println(topicBedStatus);
-
-  Serial.println(topicDeskLight);
-  Serial.println(topicDeskDistance);
-  Serial.println(topicDeskStatus);
 }
 
-// handle incoming MQTT messages
+
+// Handle incoming MQTT messages
 void handleMqttMessages() {
-  // keep MQTT client alive
+
+  // Keep MQTT connection alive
   mqttClient.poll();
 
-  // check if a message is available
-  int messageSize = mqttClient.parseMessage();
-  if (messageSize) {
-    String topic = mqttClient.messageTopic();
-    Serial.print("Incoming message on topic: ");
-    Serial.println(topic);
+  // Exit if no new message
+  if (!mqttClient.parseMessage()) return;
 
-    String payload = "";
-    while (mqttClient.available()) {
-      char c = (char)mqttClient.read();
-      payload += c;
+  String payload = "";
+
+  // Read full message
+  while (mqttClient.available()) {
+    payload += (char)mqttClient.read();
+  }
+
+  payload.trim();
+  bedMessage = payload;
+  bedMessageAvailable = true;
+
+  // Show MQTT messages only if alarm is not active
+  // Messages from other boards
+  if (!alarmActive && alarmSystemEnabled) {
+
+    String scrollText = "Bed/Desk: " + bedMessage + "   ";
+    unsigned long now = millis();
+
+    if (now - lastScrollBed > 250) {
+      lastScrollBed = now;
+
+      scrollIndexBed++;
+      if (scrollIndexBed > scrollText.length() - 16) {
+        scrollIndexBed = 0;
+      }
+
+      lcd.setCursor(0, 0);
+      lcd.print(scrollText.substring(scrollIndexBed, scrollIndexBed + 16));
     }
-    payload.trim();
-
-    Serial.print("Payload: ");
-    Serial.println(payload);
-
-    // if message is from bed topic, store and show it
-    if (topic == topicBedLight || topic == topicBedStatus || topic == topicBedMotion ||
-    topic == topicDeskLight || topic == topicDeskStatus || topic == topicDeskDistance) {
-
-    bedMessage = payload;
-    bedMessageAvailable = true;
-
-    // only scroll on LCD when no alarm is active
-    if (!alarmActive && alarmSystemEnabled) {
-
-        // ensure message is long enough for scrolling
-        String scrollText = "Bed/Desk: " + bedMessage + "   ";  // extra spaces for smooth scroll
-
-        unsigned long now = millis();
-        if (now - lastScrollBed >= scrollIntervalBed) {
-            lastScrollBed = now;
-
-            // wrap-around scrolling
-            scrollIndexBed++;
-            if (scrollIndexBed > scrollText.length() - 16) {
-                scrollIndexBed = 0;
-            }
-
-            // extract 16-character window
-            String window = scrollText.substring(scrollIndexBed, scrollIndexBed + 16);
-
-            lcd.setCursor(0, 0);
-            lcd.print(window);
-        }
-    }
-}
-    // if (topic == topicBedLight || topic == topicBedStatus || topic == topicBedMotion || topic == topicDeskLight || topic == topicDeskStatus || topic == topicDeskDistance) {
-    //   bedMessage = payload;
-    //   bedMessageAvailable = true;
-
-    //   // only update LCD top row if no alarm is active
-    //   if (!alarmActive && alarmSystemEnabled) {
-    //     lcd.setCursor(0, 0);
-    //     lcd.print("Bed/Desk: ");
-
-    //     // show up to remaining characters on line
-    //     String show = bedMessage.substring(0, 16 - 5);
-    //     lcd.print(show);
-
-    //     // pad with spaces to clear previous text
-    //     int pad = 16 - 5 - show.length();
-    //     for (int i = 0; i < pad; i++) {
-    //       lcd.print(" ");
-    //     }
-    //   }
-    // }
   }
 }
 
-// -------------------- Alarm and display functions --------------------
 
-// check noise / temp / humidity and trigger alarm
+// Check sound, temperature and humidity conditions
 void checkAlarmConditions() {
-  int sound = digitalRead(SOUND_PIN);   // LOW = noise detected
 
-  bool tempHigh = false;
-  bool humHigh  = false;
+  int soundDetected = digitalRead(SOUND_PIN);
 
-  // read updated temperature and humidity
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
+  float temperature = dht.readTemperature();
+  float humidity    = dht.readHumidity();
 
-  // validate sensor values (DHT sometimes returns NaN)
-  if (!isnan(h) && !isnan(t)) {
-    if (t > NORMAL_TEMP) tempHigh = true;
-    if (h > NORMAL_HUM)  humHigh  = true;
-  }
+  // Validate sensor readings
+  bool tempHigh = !isnan(temperature) && temperature > NORMAL_TEMP;
+  bool humHigh  = !isnan(humidity) && humidity > NORMAL_HUM;
+  bool noise    = (soundDetected == LOW);
 
-  bool noiseDetected    = (sound == LOW);
-  bool somethingIsWrong = noiseDetected || tempHigh || humHigh;
+  // Trigger alarm if any condition is abnormal
+  if (!alarmActive && (noise || tempHigh || humHigh)) {
 
-  // if nothing was happening before and now an alarm is needed
-  if (!alarmActive && somethingIsWrong) {
-    tone(BUZZER_PIN, 1000);        // simple alarm tone
+    //Alarm Trigger
+    tone(BUZZER_PIN, 1000);
+    alarmActive = true;
     alarmStartTime = millis();
-    alarmActive    = true;
     scrollPosition = 0;
 
-    // build scrolling text depending on what caused the alarm
+    // Build alert message based on cause
     alertMessage = "Alert! ";
-    if (noiseDetected) alertMessage += "Noise! ";
-    if (tempHigh)      alertMessage += "Temp! ";
-    if (humHigh)       alertMessage += "Humidity! ";
-    alertMessage += "   ";         // spacing buffer
+    if (noise)    alertMessage += "Noise ";
+    if (tempHigh) alertMessage += "Temp ";
+    if (humHigh)  alertMessage += "Humidity ";
+    alertMessage += "   ";
   }
 
-  // if alarm is active, keep scrolling the alert text
+  // Scroll alert text while alarm is active
   if (alarmActive) {
-    // during alarm, top row is used by scrolling text, so we do not show bed message here
     scrollAlertText();
   }
 
-  // stop alarm after 1 second (short beep)
-  if (alarmActive && millis() - alarmStartTime >= 1000) {
+  // Stop alarm automatically after 1 second
+  if (alarmActive && millis() - alarmStartTime > 1000) {
     stopAlarm();
   }
 }
 
-// stop the alarm sound and update LCD
+
+// Stop buzzer and reset alarm state
 void stopAlarm() {
-  noTone(BUZZER_PIN);        // stop buzzer
+
+  // Alarm
+  noTone(BUZZER_PIN);
   alarmActive = false;
 
+  //LCD Message
   lcd.setCursor(0, 0);
-  lcd.print("READY          ");
-  delay(400);
-
-  // clear top row and, if bed message exists, show it again
-  lcd.setCursor(0, 0);
-  if (bedMessageAvailable) {
-    lcd.print("Bed: ");
-    String show = bedMessage.substring(0, 16 - 5);
-    lcd.print(show);
-    int pad = 16 - 5 - show.length();
-    for (int i = 0; i < pad; i++) lcd.print(" ");
-  } else {
-    lcd.print("                ");
-  }
+  lcd.print("READY           ");
 }
 
-// disable all alarms for 5 minutes (here set to 1 minute in code)
+
+// Disable alarm temporarily using button
 void disableAlarmForFiveMinutes() {
-  alarmSystemEnabled = false;   // block new alarms
-  alarmActive        = false;
+
+  // Alarm
+  alarmSystemEnabled = false;
+  alarmActive = false;
   noTone(BUZZER_PIN);
 
-  // set a timer to re-enable alarms later
-  // 60000UL = 1 minute; change to 300000UL for real 5 minutes if needed
+  // 1 minute used for demonstration
   alarmResumeTime = millis() + 60000UL;
 
+  // LCD Message
   lcd.setCursor(0, 0);
   lcd.print("ALARM OFF 5min ");
-  delay(400);
 }
 
-// scroll the alert message on the top row
+// Scroll alert message on LCD
 void scrollAlertText() {
-  // only update text every ~0.18s to make it readable
-  if (millis() - lastScrollTime >= 180) {
+
+  if (millis() - lastScrollTime > 180) {
     lastScrollTime = millis();
 
     lcd.setCursor(0, 0);
@@ -329,109 +249,92 @@ void scrollAlertText() {
 
     scrollPosition++;
     if (scrollPosition > alertMessage.length() - 16) {
-      scrollPosition = 0;   // loop text
+      scrollPosition = 0;
     }
   }
 }
 
-// update temperature & humidity display (bottom row)
+// Update temperature and humidity display
 void updateTemperatureDisplay() {
-  // keep sensor reads spaced out to avoid slowdowns
-  if (millis() - lastDHTUpdate >= 1500) {
-    lastDHTUpdate = millis();
 
-    float h = dht.readHumidity();
-    float t = dht.readTemperature();
+  // Read DHT sensor every 1.5 seconds
+  if (millis() - lastDHTUpdate < 1500) return;
+  lastDHTUpdate = millis();
 
-    if (isnan(h) || isnan(t)) {
-      // DHT sensors sometimes fail a reading; show a friendly message
-      lcd.setCursor(0, 1);
-      lcd.print("Sensor Error   ");
-      return;
-    }
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
 
-    // show temp + humidity on bottom row
-    lcd.setCursor(0, 1);
-    lcd.print("T:");
-    lcd.print(t, 1);
-    lcd.print((char)223);  // degree symbol
-    lcd.print("C ");
+  lcd.setCursor(0, 1);
 
-    lcd.print("H:");
-    lcd.print(h, 0);
-    lcd.print("%  ");
+  // Handle sensor read error
+  if (isnan(t) || isnan(h)) {
+    lcd.print("Sensor Error   ");
+    return;
   }
+  // Continuous Temperature and Humidity measure in LCD
+  lcd.print("T:");
+  lcd.print(t, 1);
+  lcd.print((char)223);
+  lcd.print("C H:");
+  lcd.print(h, 0);
+  lcd.print("% ");
 }
 
-// -------------------- Setup and main loop --------------------
 
+// Setup runs once at startup
 void setup() {
-  // serial for debugging
-  Serial.begin(9600);
-  while (!Serial);
 
-  // lcd setup
+  Serial.begin(9600);
+
+  // LCD Message
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0, 0);
   lcd.print("Starting...");
-  delay(1200);
+  delay(1000);
   lcd.clear();
 
-  // pins setup
-  pinMode(SOUND_PIN,  INPUT);
+  // Pin Mode setup
+  pinMode(SOUND_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);  // button not pressed = HIGH
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // DHT init
+  //DHT sensor begin
   dht.begin();
 
-  // connect WiFi and MQTT
+  // WIFI Connection function call
   connectWiFi();
   connectMqtt();
 }
 
+
+// Main loop runs continuously
 void loop() {
-  // keep WiFi connection
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
-  }
 
-  // keep MQTT connection
-  if (!mqttClient.connected()) {
-    connectMqtt();
-  }
+  // Maintain WiFi and MQTT connections
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (!mqttClient.connected()) connectMqtt();
 
-  // handle mqtt incoming messages
+  // Read incoming MQTT messages
   handleMqttMessages();
 
-  // if alarms were disabled earlier, re-enable them when time runs out
+  // Re-enable alarm after timeout
   if (!alarmSystemEnabled && millis() >= alarmResumeTime) {
     alarmSystemEnabled = true;
-
     lcd.setCursor(0, 0);
     lcd.print("ALARM ACTIVE   ");
-    delay(800);
-
-    lcd.setCursor(0, 0);
-    lcd.print("                ");
   }
 
-  // check if the cancel button is pressed (LOW = pressed)
+  // Check if user pressed button
   if (digitalRead(BUTTON_PIN) == LOW) {
     disableAlarmForFiveMinutes();
   }
 
-  // temperature & humidity should always update, even when alarms are off
+  // Always update temperature and humidity
   updateTemperatureDisplay();
 
-  // if the user disabled alarms, skip checking noise/temp/humidity
-  if (!alarmSystemEnabled) {
-    noTone(BUZZER_PIN);   // make sure buzzer is off
-    alarmActive = false;
-    return;
-  }
+  // Skip alarm checks if disabled
+  if (!alarmSystemEnabled) return;
 
-  // normal alarm checking happens only if system is enabled
+  // Normal monitoring mode
   checkAlarmConditions();
 }
